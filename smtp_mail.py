@@ -2,9 +2,7 @@ import msal
 import requests
 
 # Azure application details
-client_id = "9f138ff2-743e-4d5a-b1b2-735b85e4719b"
-client_secret = "hQ28Q~Pef6zA8b15tE8OYivDCqCKVi1HKA7_Rc57"
-tenant_id = "533a0585-fc92-4ed8-928a-ab91f453e3c7"
+
 
 # OAuth2 authority and scopes
 authority = f"https://login.microsoftonline.com/{tenant_id}"

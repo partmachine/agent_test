@@ -112,10 +112,10 @@ class AzureDevOpsClient:
         Returns:
             object: Created project object
         """
-        
+        self.get_process_templates()
         capabilities = {
             "versioncontrol": {"sourceControlType": "Git"},
-            "processTemplate": {"templateTypeId": "6b724908-ef14-45cf-84f8-768b5384da45"}  # Agile process
+            "processTemplate": {"templateTypeId": "adcc42ab-9882-485e-a3ed-7678f01f66bc"}  # Agile process
         }
         self.project_name = project_name    
         self.team_name = project_name + ' Team'
@@ -151,6 +151,22 @@ class AzureDevOpsClient:
             print(f"Error creating project: {str(e)}")
             return None
    
+    def get_process_templates(self):
+    # Construct the URL for the WIQL query with a stable API version
+        url = f"{self.organization_url}/_apis/process/processes?api-version=7.1"   
+
+            # Define the headers for the request
+        headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+
+            # Send the GET request to list users
+        response = requests.get(url, headers=headers)
+
+        return None
+
+
     def delete_project(self, project_name, base_directory):
         """
         Delete a project from Azure DevOps and all its repositories
@@ -587,7 +603,6 @@ class AzureDevOpsClient:
         """
         Create a new backlog item in Azure DevOps
         Args:
-            project_name (str): Name of the project
             title (str): Title of the backlog item
             description (str): Description of the backlog item
             item_type (str): Type of the backlog item (e.g., "Product Backlog Item", "Bug")
@@ -753,7 +768,7 @@ class AzureDevOpsClient:
             print(f"Error retrieving backlog item IDs: {str(e)}")
             return []
 
-    def get_backlog_items(self, item_type="Product Backlog Item"):
+    def get_backlog_items(self, item_types=["Product Backlog Item", "Epic","Feature", "Use story", "Task"]):
         """
         Get a list of backlog items from a project in Azure DevOps
         Args:
@@ -763,8 +778,12 @@ class AzureDevOpsClient:
             list: List of WorkItemDetails objects
         """
         try:
-            # First, get the list of work item IDs
-            work_item_ids = self.get_backlog_item_ids(self.project_name, item_type)
+            # Initialize an empty list to store all work item IDs
+            work_item_ids = []
+
+            # Iterate over each item type and get the work item IDs
+            for item_type in item_types:
+                work_item_ids.extend(self.get_backlog_item_ids(item_type))
 
             # Get the Work Item Tracking client
             work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
@@ -1490,5 +1509,81 @@ class AzureDevOpsClient:
 
         except Exception as e:
             print(f"Error assigning work item to iteration: {str(e)}")
+            return None
+        
+    def set_work_item_priority(self, work_item_id, priority):
+        """
+        Assign a work item to a specific iteration in Azure DevOps
+        Args:
+            project_name (str): Name of the project
+            work_item_id (int): ID of the work item
+            priority (str): priority to assign the work item to
+        Returns:
+            object: Updated work item object or None if failed
+        """
+        try:
+            # Get the Work Item Tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Define the update operation for assigning the work item to an iteration
+            document = [
+                JsonPatchOperation(
+                    op="add",
+                    path="/fields/Microsoft.VSTS.Common.Priority",
+                    value=priority
+                )
+            ]
+
+            # Update the work item
+            updated_work_item = work_item_tracking_client.update_work_item(
+                document=document,
+                id=work_item_id,
+                project=self.project_name
+            )
+
+            print(f"Set Work item {work_item_id} priority '{priority}' successfully.")
+            return updated_work_item
+
+        except Exception as e:
+            print(f"Error assigning work item to iteration: {str(e)}")
+            return None
+        
+    def update_work_item(self, work_item_id, field_updates):
+        """
+        Update any properties of a work item in Azure DevOps
+        Args:
+            work_item_id (int): ID of the work item
+            field_updates (dict): Dictionary of field paths and their new values
+                                e.g., {
+                                    "System.Title": "New Title",
+                                    "System.State": "Active",
+                                    "System.Description": "New description"
+                                }
+        Returns:
+            object: Updated work item object or None if failed
+        """
+        try:
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+            
+            document = [
+                JsonPatchOperation(
+                    op="add",
+                    path=f"/fields/{field_path}",
+                    value=field_value
+                )
+                for field_path, field_value in field_updates.items()
+            ]
+
+            updated_work_item = work_item_tracking_client.update_work_item(
+                document=document,
+                id=work_item_id,
+                project=self.project_name
+            )
+
+            print(f"Work item {work_item_id} updated successfully.")
+            return updated_work_item
+
+        except Exception as e:
+            print(f"Error updating work item: {str(e)}")
             return None
     

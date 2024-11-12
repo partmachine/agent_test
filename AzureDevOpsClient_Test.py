@@ -15,7 +15,7 @@ base_dir = 'D:/development/repos'  # Replace with your desired base directory pa
 
 client = AzureDevOpsClient(organization,  personal_access_token)
 
-client.create_project('TestProject', 'Test Description', 'private')
+client.create_project(project_name= 'Thai Farmers Marketplace', description= "A platform to help Thai farmers sell their products directly to consumers.", visibility= "public")
 client.add_user_to_team('AI_Architect@leeney-software.com', ['Build Administrators','Project Administrators'])   
 #client.get_project_by_name('TestProject')
 

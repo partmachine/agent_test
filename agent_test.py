@@ -1,108 +1,337 @@
+from multiprocessing import context
+from pickle import GET
 from dotenv import load_dotenv
 import os
 from tavily import TavilyClient
 from AgentFunctions import AgentFunctions
 from swarm import Swarm, Agent
-from azure.devops.connection import AzureDevOpsClient
+from AzureDevOpsClient import AzureDevOpsClient  # Adjust 'path.to.file' to the actual path and file name where AzureDevOpsClient is defined
+from DevOpsAgent import DevOpsAgent
+from prompts import *
+
 
 # Load environment variables from .env file
 load_dotenv('.env')
 
+
 organization= os.getenv("DEVOPS_ORGINIZATION")
 personal_access_token = os.getenv("AZURE_DEVOPS_PAT")
 
-# Specify the base directory
-base_dir = 'D:/development/repos'  # Replace with your desired base directory path
+devops_functions = AzureDevOpsClient(organization, personal_access_token)
 
-devops_functions = AzureDevOpsClient(organization,  personal_access_token)
+def escalate_to_agent(reason=None):
+    return f"Escalating to agent: {reason}" if reason else "Escalating to agent"
 
-tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+def valid_to_change_flight():
+    return "Customer is eligible to change flight"
+
+def change_flight():
+    return "Flight was successfully changed!"
+
+def initiate_refund():
+    status = "Refund initiated"
+    return status
+
+def initiate_flight_credits():
+    status = "Successfully initiated flight credits"
+    return status
+
+def case_resolved():
+    return "Case resolved. No further questions."
+
+def initiate_baggage_search():
+    return "Baggage was found!"
+
+def transfer_to_product_owner():
+    return product_owner_inception
+
+# generic funcyions
+def transfer_to_product_owner_planning():
+    print(f"TRANSFER_TO_PRODUCT_OWNER_PLANNING")
+    return product_owner_planning
+
+def transfer_to_product_owner_development():
+    print(f"TRANSFER_TO_PRODUCT_OWNER_DEVELOPMENT")
+    return product_owner_development
+
+def transfer_to_architect_planning():
+    print(f"TRANSFER_TO_DEVELOPMENT_ARCHITECTURE")
+    return development_architect_planning
+
+def get_project_name(agent):
+    return agent.context_variables["project name"]
+
+def get_iteration(agent):
+    return agent.context_variables["iteration"]
+
+def get_phase(agent):
+    return agent.context_variables["phase"]
+
+def set_project_name(context_variables,project_name):
+    context_variables["project name"] = project_name
+
+def set_iteration(context_variables,iteration_name):
+    context_variables["iteration_name"] = iteration_name
+
+def set_phase(context_variables,phase):
+    context_variables["phase"] = phase
 
 
-dev
+# def triage_instructions(context_variables):
+#     customer_context = context_variables.get("customer_context", None)
+#     flight_context = context_variables.get("flight_context", None)
+#     return f"""You are to triage a users request, and call a tool to transfer to the right intent.
+#     Once you are ready to transfer to the right intent, call the tool to transfer to the right intent.
+#     You dont need to know specifics, just the topic of the request.
+#     When you need more information to triage the request to an agent, ask a direct question without explaining why you're asking it.
+#     Do not share your thought process with the user! Do not make unreasonable assumptions on behalf of user.
+#     The customer context is here: {customer_context}, and flight context is here: {flight_context}"""
 
-devopsagent = Agent(
-    name="Azure DevOps Administrator",
-    instructions="""
-    You are a helpfull Azure DevOps Administrator, your primary role is to manage, maintain, and optimize the Azure DevOps environment to support efficient, 
-    secure, and reliable development and deployment workflows. 
-    You collaborate with development teams, project leads, and stakeholders to ensure that the environment meets business needs and follows best practices in CI/CD, 
-    security, and scalability.
-    Primary Objectives:
-    - Environment Setup and Configuration: Create, configure, and maintain Azure DevOps projects, repositories, pipelines, and boards. Ensure the environment is secure, reliable, and supports all teams’ requirements for software development and release.
-    - User Access and Permissions Management: Manage user roles, permissions, and access controls to ensure appropriate access levels for projects and resources, 
-      maintaining security and compliance.
-    - Pipeline Optimization: Create, maintain, and optimize CI/CD pipelines, automating build and deployment workflows, 
-      and ensuring efficient delivery of updates. Troubleshoot and resolve pipeline issues swiftly.
-    - Security and Compliance: Implement and enforce security policies, manage vulnerability scans, 
-      and ensure that Azure DevOps complies with organizational and regulatory standards.
-    - Monitoring and Maintenance: Set up monitoring, logging, and alerting for pipelines and other Azure DevOps resources to proactively address performance or availability issues.
-    - Integrations and Automation: Integrate Azure DevOps with other platforms and tools (e.g., Azure, GitHub, Jira) 
-      to streamline processes, enhance productivity, and support end-to-end automation.
-    - Disaster Recovery Planning: Implement backup and recovery procedures for key components, 
-      ensuring quick recovery in the event of outages or system failures.
-    
-    Example Scenarios:
-    - Set up a new Azure DevOps project for a development team, configuring repositories, pipelines, and access permissions according to their needs.
-    - Troubleshoot a failed CI/CD pipeline, identifying root causes, resolving issues, and improving the pipeline’s reliability.
-     -Manage user access controls, adding new team members and adjusting permissions to align with security policies.
-    - Work with security teams to implement vulnerability scans on repositories and ensure compliance with the organization’s security requirements.
-    - Integrate Azure DevOps with external tools, such as Slack or Teams, to notify developers of build statuses, deployments, or incidents.  
 
-    - Available functions:
-    The following functions are availabel to you:
-    - devops_functions.create_project: 
-        Create a new project in Azure DevOps
-        Args:
-            project_name (str): Name of the project
-            description (str): Project description
-            visibility (str): private or public
-        Returns:
-            object: Created project object
-    - devops_functions.add_user_to_team:
-        
-        Invite a user to the Azure DevOps organization using the REST API
-        Args:
-            user_email (str): Email of the user to invite
-            additional_groups (list): List of additional group names to add the user to
-        Returns:
-            dict: Response from the API if the invitation is successful, None otherwise
-    - devops_developer.add_readme_to_repo:
-      Add a README.md file to the root of a repository in Azure DevOps
-        Args:
-            project_name (str): Name of the project
-            repo_name (str): Name of the repository
-            content (str): Content of the README.md file
-    - devops_functions.clone_repository_locally:
-      Clone a repository from Azure DevOps to a local directory
-        Args:            
-            repo_name (str): Name of the repository
-            base_directory (str): Local directory to clone the repository into
-    """,
+product_owner_inception = DevOpsAgent(
+    name="Product Owner Agent (INCEPTION)",
+    instructions=STARTER_PROMPT + PRODUCT_OWNER_INCEPTION,
     functions=[
-        devops_functions.create_project, 
-        devops_functions.add_user_to_team,
-        devops_functions.add_readme_to_repo,
-        devops_functions.add_default_folders_to_repo,
-        devops_functions.clone_repository_locally],
+        devops_functions.create_project,
+        devops_functions.create_backlog_item,
+        devops_functions.add_work_item_comment,
+        devops_functions.assign_work_item_to_iteration,
+        devops_functions.create_iteration,          
+        devops_functions.set_work_item_priority,
+        devops_functions.update_work_item,
+        get_project_name,
+        get_iteration,
+        get_phase,
+        set_project_name,
+        set_iteration,
+        set_phase,  
+        transfer_to_architect_planning,  
+        transfer_to_product_owner_planning
+    ],
 )
 
-product_owner_agent = Agent(
-    name="Product Owner Agent",
-    instructions="Only speak in Haikus.",
+product_owner_planning = DevOpsAgent(
+    name="Product Owner Agent (PLANNING)",
+    instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
+    functions=[
+        devops_functions.create_project,
+        devops_functions.create_backlog_item,
+        devops_functions.add_work_item_comment,
+        devops_functions.assign_work_item_to_iteration,
+        devops_functions.create_iteration,          
+        devops_functions.set_work_item_priority,
+        devops_functions.update_work_item,
+        get_project_name,
+        get_iteration,
+        get_phase,
+        set_project_name,
+        set_iteration,
+        set_phase,  
+        transfer_to_architect_planning,
+        transfer_to_product_owner_development
+    ],
 )
 
-stakeholder_agent = Agent(
-    name="Stakeholder Agent",
-    instructions="Only speak in Haikus.",
+product_owner_development = DevOpsAgent(
+    name="Product Owner Agent (PLANNING)",
+    instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
+    functions=[
+        devops_functions.create_project,
+        devops_functions.create_backlog_item,
+        devops_functions.add_work_item_comment,
+        devops_functions.assign_work_item_to_iteration,
+        devops_functions.create_iteration,          
+        devops_functions.set_work_item_priority,
+        devops_functions.update_work_item,
+        get_project_name,
+        get_iteration,
+        get_phase,
+        set_project_name,
+        set_iteration,
+        set_phase,
+        transfer_to_architect_planning
+    ],
 )
 
-# Set agent_b in the AgentFunctions instance
-
-
-response = client.run(
-    agent=agent_a,
-    messages=[{"role": "user", "content": "I want to talk to agent B."}],
+development_architect_planning = DevOpsAgent(
+    name="Development Architecture Agent (PLANNING)",
+    instructions=STARTER_PROMPT + DEVELOPMENT_ARCHITECT_INCEPTION_AND_PLANNING,
+    functions=[
+        devops_functions.create_project,
+        devops_functions.create_backlog_item,
+        devops_functions.add_work_item_comment,
+        devops_functions.assign_work_item_to_iteration,
+        devops_functions.create_iteration,          
+        devops_functions.set_work_item_priority,
+        devops_functions.update_work_item,
+        get_project_name,
+        get_iteration,
+        get_phase,
+        set_project_name,
+        set_iteration,
+        set_phase        
+    ],
 )
 
-print(response.messages[-1]["content"])
+# triage_agent = Agent(
+#     name="Triage Agent",
+#     instructions=triage_instructions,
+#     functions=[transfer_to_flight_modification, transfer_to_lost_baggage],
+# )
+
+# flight_modification = Agent(
+#     name="Flight Modification Agent",
+#     instructions="""You are a Flight Modification Agent for a customer service airlines company.
+#       You are an expert customer service agent deciding which sub intent the user should be referred to.
+# You already know the intent is for flight modification related question. First, look at message history and see if you can determine if the user wants to cancel or change their flight.
+# Ask user clarifying questions until you know whether or not it is a cancel request or change flight request. Once you know, call the appropriate transfer function. Either ask clarifying questions, or call one of your functions, every time.""",
+#     functions=[transfer_to_flight_cancel, transfer_to_flight_change],
+#     parallel_tool_calls=False,
+# )
+
+# flight_cancel = Agent(
+#     name="Flight cancel traversal",
+#     instructions=STARTER_PROMPT + FLIGHT_CANCELLATION_POLICY,
+#     functions=[
+#         escalate_to_agent,
+#         initiate_refund,
+#         initiate_flight_credits,
+#         transfer_to_triage,
+#         case_resolved,
+#     ],
+# )
+
+# flight_change = Agent(
+#     name="Flight change traversal",
+#     instructions=STARTER_PROMPT + FLIGHT_CHANGE_POLICY,
+#     functions=[
+#         escalate_to_agent,
+#         change_flight,
+#         valid_to_change_flight,
+#         transfer_to_triage,
+#         case_resolved,
+#     ],
+# )
+
+# lost_baggage = Agent(
+#     name="Lost baggage traversal",
+#     instructions=STARTER_PROMPT + LOST_BAGGAGE_POLICY,
+#     functions=[
+#         escalate_to_agent,
+#         initiate_baggage_search,
+#         transfer_to_triage,
+#         case_resolved,
+#     ],
+# )
+
+import json
+
+from swarm import Swarm
+
+
+def process_and_print_streaming_response(response):
+    content = ""
+    last_sender = ""
+
+    for chunk in response:
+        if "sender" in chunk:
+            last_sender = chunk["sender"]
+
+        if "content" in chunk and chunk["content"] is not None:
+            if not content and last_sender:
+                print(f"\033[94m{last_sender}:\033[0m", end=" ", flush=True)
+                last_sender = ""
+            print(chunk["content"], end="", flush=True)
+            content += chunk["content"]
+
+        if "tool_calls" in chunk and chunk["tool_calls"] is not None:
+            for tool_call in chunk["tool_calls"]:
+                f = tool_call["function"]
+                name = f["name"]
+                if not name:
+                    continue
+                print(f"\033[94m{last_sender}: \033[95m{name}\033[0m()")
+
+        if "delim" in chunk and chunk["delim"] == "end" and content:
+            print()  # End of response message
+            content = ""
+
+    if response.agent.context_variables:
+        return response.agent.context_variables
+
+
+def pretty_print_messages(messages) -> None:
+    for message in messages:
+        if message["role"] != "assistant":
+            continue
+
+        # print agent name in blue
+        print(f"\033[94m{message['sender']}\033[0m:", end=" ")
+
+        # print response, if any
+        if message["content"]:
+            print(message["content"])
+
+        # print tool calls in purple, if any
+        tool_calls = message.get("tool_calls") or []
+        if len(tool_calls) > 1:
+            print()
+        for tool_call in tool_calls:
+            f = tool_call["function"]
+            name, args = f["name"], f["arguments"]
+            arg_str = json.dumps(json.loads(args)).replace(":", "=")
+            print(f"\033[95m{name}\033[0m({arg_str[1:-1]})")
+        
+
+def run_demo_loop(
+    starting_agent, context_variables=None, stream=False, debug=False
+) -> None:
+    client = Swarm()
+    print("Starting Swarm CLI 🐝")
+
+    messages = []
+    agent = starting_agent
+    agent.context_variables = context_variables
+
+    while True:
+        user_input = input("Stakeholder Input: ")
+        if user_input.lower() == "/exit":
+            print("Exiting the loop. Goodbye!")
+            break  # Exit the loop
+        messages.append({"role": "user", "content": user_input})
+
+        response = client.run(
+            agent=agent,
+            messages=messages,
+            context_variables=agent.context_variables or {},
+            stream=stream,
+            debug=debug,
+        )
+
+        if stream:
+            response = process_and_print_streaming_response(response)
+        else:
+            pretty_print_messages(response.messages)
+
+        messages.extend(response.messages)
+        agent = response.agent
+
+        #total_tokens += response.usage.total_tokens
+        # total_prompt_tokens += response.usage.prompt_tokens
+        # completion_tokens += response.usage.completion_tokens
+
+        # print(f"Total tokens used: {total_tokens}")
+        # print(f"Total prompt tokens used: {total_prompt_tokens}")
+        # print(f"Total completion tokens used: {completion_tokens}")
+
+total_tokens = 0
+total_prompt_tokens = 0
+completion_tokens = 0
+
+po_context_variables = {
+"phase": "Inception",
+"iteration": "",
+"project name": "",
+}
+
+run_demo_loop(product_owner_inception, context_variables=po_context_variables, debug=True)        

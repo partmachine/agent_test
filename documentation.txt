@@ -1,0 +1,84 @@
+# AzureDevOpsClient Documentation
+
+## Function Descriptions
+
+### devops_functions.add_readme_to_repo
+- Description: Add a README.md file to the root of a repository in Azure DevOps.
+- Args:
+  - project_name (str): Name of the project.
+  - repo_name (str): Name of the repository.
+  - content (str): Content of the README.md file.
+- Returns: None.
+
+### devops_functions.add_default_folders_to_repo
+- Description: Add specified folders with a descriptive README.md file to the root of a repository in Azure DevOps.
+- Args:
+  - project_name (str): Name of the project.
+  - folders (list): List of folder names to add.
+  - repo_name (str): Name of the repository.
+- Returns: None.
+
+### devops_functions.add_work_item_comment
+- Description: Add a comment to an existing work item in Azure DevOps.
+- Args:
+  - work_item_id (int): ID of the work item.
+  - comment_text (str): Text of the comment to add.
+- Returns: object: Created comment object or None if failed.
+
+### devops_functions.assign_backlog_item
+- Description: Assign a backlog item to a specific user in Azure DevOps.
+- Args:
+  - work_item_id (int): ID of the work item.
+  - user_email (str): Email of the user to assign the work item to.
+- Returns: object: Updated work item object or None if failed.
+
+### devops_functions.create_project
+- Description: Create a new project in Azure DevOps.
+- Args:
+  - project_name (str): Name of the project.
+  - description (str): Project description.
+  - visibility (str): Visibility of the project (private or public).
+- Returns: object: Created project object or None if failed.
+
+### devops_functions.delete_project
+- Description: Delete a project from Azure DevOps and all its repositories.
+- Args:
+  - project_name (str): Name of the project to delete.
+  - base_directory (str): Local directory where repositories are cloned.
+- Returns: None.
+
+### devops_functions.create_repository
+- Description: Create a new Git repository in an Azure DevOps project and clone it to a local directory.
+- Args:
+  - project_name (str): Name of the project.
+  - repo_name (str): Name of the repository.
+- Returns: object: Created repository object or None if failed.
+
+### devops_functions.create_iteration
+- Description: Create a new iteration in Azure DevOps using the REST API.
+- Args:
+  - project_name (str): Name of the project.
+  - iteration_name (str): Name of the iteration.
+  - start_date (str): Start date of the iteration in 'YYYY-MM-DD' format.
+  - finish_date (str): Finish date of the iteration in 'YYYY-MM-DD' format.
+- Returns: dict: Created iteration object or None if failed.
+
+### devops_functions.assign_work_item_to_user
+- Description: Assign a work item to a specific user in Azure DevOps.
+- Args:
+  - work_item_id (int): ID of the work item to assign.
+  - user_email (str): Email of the user to assign the work item to.
+- Returns: object: Updated work item object or None if failed.
+
+### devops_functions.assign_work_item_to_iteration
+- Description: Assign a work item to a specific iteration in Azure DevOps.
+- Args:
+  - work_item_id (int): ID of the work item.
+  - iteration_path (str): Path of the iteration to assign the work item to.
+- Returns: object: Updated work item object or None if failed.
+
+### devops_functions.get_backlog_items
+- Description: Retrieve backlog items of a specific type from Azure DevOps.
+- Args:
+  - item_type (str): Type of backlog item to retrieve (default is "Product Backlog Item").
+- Returns: list: List of backlog items or None if failed.
