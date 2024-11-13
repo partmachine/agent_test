@@ -42,10 +42,24 @@ def case_resolved():
 def initiate_baggage_search():
     return "Baggage was found!"
 
+
 def transfer_to_product_owner():
+    phase = context_variables.get("phase").lower()
+    agents = {
+        "inception phase": product_owner_inception,
+        "planning phase": product_owner_planning,
+        "development phase": product_owner_development,
+        # Add other phases and corresponding agents here as needed
+    }
+
+    for key in agents:
+        # Check if the phase is contained within the agent's key
+        if phase in key:
+            return agents[key]
+        
     return product_owner_inception
 
-# generic funcyions
+# generic functions
 def transfer_to_product_owner_planning():
     print(f"TRANSFER_TO_PRODUCT_OWNER_PLANNING")
     return product_owner_planning
@@ -55,26 +69,28 @@ def transfer_to_product_owner_development():
     return product_owner_development
 
 def transfer_to_architect_planning():
-    print(f"TRANSFER_TO_DEVELOPMENT_ARCHITECTURE")
+    print(f"TRANSFER_TO_DEVELOPMENT_ARCHITECT")
+    development_architect_planning.calling_agent = current_agent
     return development_architect_planning
 
-def get_project_name(agent):
-    return agent.context_variables["project name"]
+def get_project_name():
+    return context_variables["project_name"]
 
-def get_iteration(agent):
-    return agent.context_variables["iteration"]
+def get_iteration():
+    return context_variables["iteration"]
 
-def get_phase(agent):
-    return agent.context_variables["phase"]
+def get_phase():
+    return context_variables["phase"]
 
-def set_project_name(context_variables,project_name):
-    context_variables["project name"] = project_name
+def set_project_name(project_name):
+    context_variables["project_name"] = project_name
 
-def set_iteration(context_variables,iteration_name):
+def set_iteration(iteration_name):
     context_variables["iteration_name"] = iteration_name
 
-def set_phase(context_variables,phase):
+def set_phase(phase):
     context_variables["phase"] = phase
+    transfer_to_product_owner()
 
 
 # def triage_instructions(context_variables):
@@ -93,6 +109,8 @@ product_owner_inception = DevOpsAgent(
     instructions=STARTER_PROMPT + PRODUCT_OWNER_INCEPTION,
     functions=[
         devops_functions.create_project,
+        devops_functions.get_project_by_name,
+        devops_functions.get_work_items_hierarchy,
         devops_functions.create_backlog_item,
         devops_functions.add_work_item_comment,
         devops_functions.assign_work_item_to_iteration,
@@ -106,6 +124,7 @@ product_owner_inception = DevOpsAgent(
         set_iteration,
         set_phase,  
         transfer_to_architect_planning,  
+        transfer_to_product_owner,
         transfer_to_product_owner_planning
     ],
 )
@@ -114,7 +133,8 @@ product_owner_planning = DevOpsAgent(
     name="Product Owner Agent (PLANNING)",
     instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
     functions=[
-        devops_functions.create_project,
+        devops_functions.get_project_by_name,
+        devops_functions.get_work_items_hierarchy,
         devops_functions.create_backlog_item,
         devops_functions.add_work_item_comment,
         devops_functions.assign_work_item_to_iteration,
@@ -128,15 +148,19 @@ product_owner_planning = DevOpsAgent(
         set_iteration,
         set_phase,  
         transfer_to_architect_planning,
+        transfer_to_product_owner,
+        transfer_to_product_owner_planning,
         transfer_to_product_owner_development
     ],
 )
 
 product_owner_development = DevOpsAgent(
-    name="Product Owner Agent (PLANNING)",
+    name="Product Owner Agent (DEVELOPMENT)",
     instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
     functions=[
         devops_functions.create_project,
+        devops_functions.get_project_by_name,
+        devops_functions.get_work_items_hierarchy,
         devops_functions.create_backlog_item,
         devops_functions.add_work_item_comment,
         devops_functions.assign_work_item_to_iteration,
@@ -149,7 +173,9 @@ product_owner_development = DevOpsAgent(
         set_project_name,
         set_iteration,
         set_phase,
-        transfer_to_architect_planning
+        transfer_to_product_owner,
+        transfer_to_product_owner_planning,
+        transfer_to_product_owner_development
     ],
 )
 
@@ -157,7 +183,8 @@ development_architect_planning = DevOpsAgent(
     name="Development Architecture Agent (PLANNING)",
     instructions=STARTER_PROMPT + DEVELOPMENT_ARCHITECT_INCEPTION_AND_PLANNING,
     functions=[
-        devops_functions.create_project,
+        devops_functions.get_project_by_name,
+        devops_functions.get_work_items_hierarchy,
         devops_functions.create_backlog_item,
         devops_functions.add_work_item_comment,
         devops_functions.assign_work_item_to_iteration,
@@ -169,7 +196,10 @@ development_architect_planning = DevOpsAgent(
         get_phase,
         set_project_name,
         set_iteration,
-        set_phase        
+        set_phase,
+        transfer_to_product_owner,
+        transfer_to_product_owner_planning,
+        transfer_to_product_owner_development
     ],
 )
 
@@ -254,11 +284,7 @@ def process_and_print_streaming_response(response):
 
         if "delim" in chunk and chunk["delim"] == "end" and content:
             print()  # End of response message
-            content = ""
-
-    if response.agent.context_variables:
-        return response.agent.context_variables
-
+            content = ""     
 
 def pretty_print_messages(messages) -> None:
     for message in messages:
@@ -282,7 +308,7 @@ def pretty_print_messages(messages) -> None:
             arg_str = json.dumps(json.loads(args)).replace(":", "=")
             print(f"\033[95m{name}\033[0m({arg_str[1:-1]})")
         
-
+current_agent = None  
 def run_demo_loop(
     starting_agent, context_variables=None, stream=False, debug=False
 ) -> None:
@@ -291,6 +317,7 @@ def run_demo_loop(
 
     messages = []
     agent = starting_agent
+    current_agent = agent
     agent.context_variables = context_variables
 
     while True:
@@ -303,7 +330,7 @@ def run_demo_loop(
         response = client.run(
             agent=agent,
             messages=messages,
-            context_variables=agent.context_variables or {},
+            context_variables=context_variables or {},
             stream=stream,
             debug=debug,
         )
@@ -314,7 +341,9 @@ def run_demo_loop(
             pretty_print_messages(response.messages)
 
         messages.extend(response.messages)
-        agent = response.agent
+        current_agent = response.agent
+        agent = current_agent
+
 
         #total_tokens += response.usage.total_tokens
         # total_prompt_tokens += response.usage.prompt_tokens
@@ -324,14 +353,15 @@ def run_demo_loop(
         # print(f"Total prompt tokens used: {total_prompt_tokens}")
         # print(f"Total completion tokens used: {completion_tokens}")
 
-total_tokens = 0
-total_prompt_tokens = 0
-completion_tokens = 0
+      
+# total_tokens = 0
+# total_prompt_tokens = 0
+# completion_tokens = 0
 
-po_context_variables = {
-"phase": "Inception",
+context_variables = {
+"phase": "Inception Phase",
 "iteration": "",
 "project name": "",
 }
 
-run_demo_loop(product_owner_inception, context_variables=po_context_variables, debug=True)        
+run_demo_loop(product_owner_inception, context_variables=context_variables, debug=False)        
