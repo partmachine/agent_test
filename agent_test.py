@@ -7,7 +7,9 @@ from AgentFunctions import AgentFunctions
 from swarm import Swarm, Agent
 from AzureDevOpsClient import AzureDevOpsClient  # Adjust 'path.to.file' to the actual path and file name where AzureDevOpsClient is defined
 from DevOpsAgent import DevOpsAgent
-from prompts import *
+from prompts.po_prompts import *
+from prompts.starter_prompt import *
+from prompts.developer_prompts import * 
 
 
 # Load environment variables from .env file
@@ -17,7 +19,7 @@ load_dotenv('.env')
 organization= os.getenv("DEVOPS_ORGINIZATION")
 personal_access_token = os.getenv("AZURE_DEVOPS_PAT")
 
-devops_functions = AzureDevOpsClient(organization, personal_access_token)
+devops = AzureDevOpsClient(organization, personal_access_token)
 
 def escalate_to_agent(reason=None):
     return f"Escalating to agent: {reason}" if reason else "Escalating to agent"
@@ -68,10 +70,22 @@ def transfer_to_product_owner_development():
     print(f"TRANSFER_TO_PRODUCT_OWNER_DEVELOPMENT")
     return product_owner_development
 
-def transfer_to_architect_planning():
-    print(f"TRANSFER_TO_DEVELOPMENT_ARCHITECT")
-    development_architect_planning.calling_agent = current_agent
-    return development_architect_planning
+def transfer_to_planning_architect():
+    print(f"TRANSFER_TO_PLANNING_ARCHITECT")
+    planning_architect.calling_agent = current_agent
+    return planning_architect
+
+def transfer_to_ui_developer(member_email):
+    print(f"TRANSFER_TO_UI_DEVELOPER: {member_email}")
+    ui_developer.calling_agent = current_agent
+    return ui_developer
+
+def transfer_to_dotnet_developer(member_email):
+    print(f"TRANSFER_TO_DOTNET_DEVELOPER: {member_email}")
+    dotnet_developer.calling_agent = current_agent
+    return dotnet_developer
+
+
 
 def get_project_name():
     return context_variables["project_name"]
@@ -104,26 +118,68 @@ def set_phase(phase):
 #     The customer context is here: {customer_context}, and flight context is here: {flight_context}"""
 
 
+shared_functions = [
+    # Project Management
+    devops.project.create_project,
+    devops.project.delete_project,
+    devops.project.get_project_by_name,
+    devops.project.get_current_phase,
+    devops.project.set_current_phase,
+    devops.project.to_dict,
+    devops.project.to_json,
+    
+    # Work Items
+    devops.project.get_work_items_hierarchy,
+    devops.project.create_backlog_item,
+    devops.project.add_work_item_comment,
+    devops.project.update_work_item,
+    devops.project.get_work_item_details,
+    devops.project.get_work_item_comments,
+    devops.project.get_work_item_relations,
+    devops.project.get_work_items_assigned_to_user,
+    devops.project.assign_work_item_to_user,
+    devops.project.set_work_item_phase,
+    
+    # Repository Management
+    devops.project.create_repository,
+    devops.project.delete_repository,
+    devops.project.clone_repository_locally,
+    devops.project.add_readme_to_repo,
+    devops.project.add_default_folders_to_repo,
+    
+    # Team & User Management
+    devops.project.create_team,
+    devops.project.add_user_to_team,
+    devops.project.remove_user_from_team,
+    devops.project.list_user_teams,
+    devops.project.list_users_via_rest_api,
+    devops.project.list_team_users,
+    devops.project.list_users_in_tenant,
+    devops.project.find_user,
+    devops.project.search_user_entitlements_by_email,
+    devops.project.remove_user_matching,
+    
+    # Area & Iteration
+    devops.project.create_area,
+    devops.project.create_iteration,
+    devops.project.assign_work_item_to_iteration,
+    
+    # Group Management
+    devops.project.get_group_by_descriptor,
+    devops.project.find_group_by_display_name,
+    
+    # Utility Functions
+    get_project_name,
+    get_iteration,    
+    set_project_name,
+    set_iteration,
+    
+]
+
 product_owner_inception = DevOpsAgent(
     name="Product Owner Agent (INCEPTION)",
     instructions=STARTER_PROMPT + PRODUCT_OWNER_INCEPTION,
-    functions=[
-        devops_functions.create_project,
-        devops_functions.get_project_by_name,
-        devops_functions.get_work_items_hierarchy,
-        devops_functions.create_backlog_item,
-        devops_functions.add_work_item_comment,
-        devops_functions.assign_work_item_to_iteration,
-        devops_functions.create_iteration,          
-        devops_functions.set_work_item_priority,
-        devops_functions.update_work_item,
-        get_project_name,
-        get_iteration,
-        get_phase,
-        set_project_name,
-        set_iteration,
-        set_phase,  
-        transfer_to_architect_planning,  
+    functions=shared_functions + [        
         transfer_to_product_owner,
         transfer_to_product_owner_planning
     ],
@@ -132,22 +188,8 @@ product_owner_inception = DevOpsAgent(
 product_owner_planning = DevOpsAgent(
     name="Product Owner Agent (PLANNING)",
     instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
-    functions=[
-        devops_functions.get_project_by_name,
-        devops_functions.get_work_items_hierarchy,
-        devops_functions.create_backlog_item,
-        devops_functions.add_work_item_comment,
-        devops_functions.assign_work_item_to_iteration,
-        devops_functions.create_iteration,          
-        devops_functions.set_work_item_priority,
-        devops_functions.update_work_item,
-        get_project_name,
-        get_iteration,
-        get_phase,
-        set_project_name,
-        set_iteration,
-        set_phase,  
-        transfer_to_architect_planning,
+    functions=shared_functions + [
+        transfer_to_planning_architect,
         transfer_to_product_owner,
         transfer_to_product_owner_planning,
         transfer_to_product_owner_development
@@ -157,52 +199,40 @@ product_owner_planning = DevOpsAgent(
 product_owner_development = DevOpsAgent(
     name="Product Owner Agent (DEVELOPMENT)",
     instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
-    functions=[
-        devops_functions.create_project,
-        devops_functions.get_project_by_name,
-        devops_functions.get_work_items_hierarchy,
-        devops_functions.create_backlog_item,
-        devops_functions.add_work_item_comment,
-        devops_functions.assign_work_item_to_iteration,
-        devops_functions.create_iteration,          
-        devops_functions.set_work_item_priority,
-        devops_functions.update_work_item,
-        get_project_name,
-        get_iteration,
-        get_phase,
-        set_project_name,
-        set_iteration,
-        set_phase,
+    functions=shared_functions + [
         transfer_to_product_owner,
         transfer_to_product_owner_planning,
-        transfer_to_product_owner_development
+        transfer_to_product_owner_development,
+        transfer_to_ui_developer
     ],
 )
 
-development_architect_planning = DevOpsAgent(
-    name="Development Architecture Agent (PLANNING)",
+planning_architect = DevOpsAgent(
+    name="Development Architect Agent (PLANNING)",
     instructions=STARTER_PROMPT + DEVELOPMENT_ARCHITECT_INCEPTION_AND_PLANNING,
-    functions=[
-        devops_functions.get_project_by_name,
-        devops_functions.get_work_items_hierarchy,
-        devops_functions.create_backlog_item,
-        devops_functions.add_work_item_comment,
-        devops_functions.assign_work_item_to_iteration,
-        devops_functions.create_iteration,          
-        devops_functions.set_work_item_priority,
-        devops_functions.update_work_item,
-        get_project_name,
-        get_iteration,
-        get_phase,
-        set_project_name,
-        set_iteration,
-        set_phase,
+    functions=shared_functions + [
         transfer_to_product_owner,
-        transfer_to_product_owner_planning,
-        transfer_to_product_owner_development
+        transfer_to_planning_architect
     ],
 )
 
+ui_developer = DevOpsAgent(
+    name="Developer Agent (UI)",
+    instructions=STARTER_PROMPT + UI_DEVELOPER_PROMPT,
+    functions=shared_functions + [
+        transfer_to_product_owner,
+        transfer_to_product_owner_planning
+    ],
+)
+
+dotnet_developer = DevOpsAgent(
+    name="Developer Agent (DOTNET)",
+    instructions=STARTER_PROMPT + DOTNET_DEVELOPER_PROMPT,
+    functions=shared_functions + [
+        transfer_to_product_owner,        
+        transfer_to_product_owner_development
+    ],
+)
 # triage_agent = Agent(
 #     name="Triage Agent",
 #     instructions=triage_instructions,

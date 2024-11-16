@@ -13,6 +13,7 @@ from azure.devops.v7_1.work_item_tracking.models import JsonPatchOperation
 from azure.devops.v7_1.graph.models import GraphSubjectLookup, GraphUser, GraphMembership
 from azure.devops.v7_1.member_entitlement_management import MemberEntitlementManagementClient
 import hashlib
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,10 @@ class RepositoryError(AzureDevOpsError):
 
 class UserError(AzureDevOpsError):
     """Exception raised for user-related errors"""
+    pass
+
+class GroupError(AzureDevOpsError):
+    """Exception raised for group-related errors"""
     pass
 
 class ValidationError(AzureDevOpsError):
@@ -95,7 +100,7 @@ class WorkItemDetails:
                      comment_count=0, changed_date='', created_date='', board_column='',
                      board_column_done=False, state_change_date='', priority=0,
                      value_area='', kanban_column='', kanban_column_done=False,
-                     created_by='', changed_by='', id=None, url=None, comments=None, children=None):
+                     created_by='', changed_by='', id=None, url=None, comments=None, items=None):
             self.id = id
             self.url = url
             self.title = title
@@ -120,7 +125,7 @@ class WorkItemDetails:
             self.created_by = created_by
             self.changed_by = changed_by
             self.comments = comments or []
-            self.children = children or []
+            self.items = items or []
 
         def to_dict(self):
             return {
@@ -148,7 +153,7 @@ class WorkItemDetails:
                 "created_by": self.created_by,
                 "changed_by": self.changed_by,
                 "comments": self.comments,
-                "children": [child.to_dict() for child in self.children] if self.children else []
+                "items": [child.to_dict() for child in self.items] if self.items else []
             }
         
  
@@ -212,7 +217,7 @@ class AzureDevOpsProject(TeamProject):
         self.local_repo_path = None
 
     # Create a new project in Azure DevOps
-    def create_project(self, project_name, description="", visibility="private"):
+    def create_project(self, project_name, description="", visibility="private", process_template_Name='Agile'):
         """
         Create a new project in Azure DevOps
         Args:
@@ -227,14 +232,15 @@ class AzureDevOpsProject(TeamProject):
         """
         try:
             validate_project_name(project_name)
-            
+
+            self.template_id = self.get_process_templates(process_template_Name)
             capabilities = {
                 "versioncontrol": {"sourceControlType": "Git"},
                 "processTemplate": {"templateTypeId": self.template_id}  # Dynamic template ID
             }
             self.project_name = project_name    
             self.team_name = project_name + ' Team'
-            self.repo_name = project_name + ' Repository'
+            self.repo_name = project_name
             
             project = TeamProject(
                 name=self.project_name,
@@ -259,6 +265,7 @@ class AzureDevOpsProject(TeamProject):
                 if repo:
                     self.repo_name = repo.name
                 
+                self.name = self.project_name
                 self.team_name = self.project_name + ' Team'
 
                 self.create_area('inception')
@@ -348,7 +355,7 @@ class AzureDevOpsProject(TeamProject):
             }
 
             # Make API request to get work items
-            url = f"{self.organization_url}/{self.project_name}/_apis/wit/wiql?api-version=6.0"
+            url = f"{self.organization_url}/{self.name}/_apis/wit/wiql?api-version=6.0"
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
@@ -400,7 +407,7 @@ class AzureDevOpsProject(TeamProject):
                                     created_by=fields.get('System.CreatedBy', {}).get('displayName', ''),
                                     changed_by=fields.get('System.ChangedBy', {}).get('displayName', ''),
                                     comments=[],
-                                    children=[]
+                                    items=[]
                                 )
 
             # Build the hierarchy
@@ -411,7 +418,7 @@ class AzureDevOpsProject(TeamProject):
             for source_id, target_id in relations:
                 child_items.add(target_id)
                 if source_id in work_items_dict and target_id in work_items_dict:
-                    work_items_dict[source_id].children.append(work_items_dict[target_id])
+                    work_items_dict[source_id].items.append(work_items_dict[target_id])
 
             # Collect root items (items that are not children)
             for item_id in work_items_dict:
@@ -425,7 +432,7 @@ class AzureDevOpsProject(TeamProject):
 
             root_items.sort(key=sort_by_type)
             for item in work_items_dict.values():
-                item.children.sort(key=sort_by_type)
+                item.items.sort(key=sort_by_type)
 
             # Convert root items to dictionaries (children will be converted recursively)
             hierarchy_dict = [item.to_dict() for item in root_items]
@@ -504,8 +511,16 @@ class AzureDevOpsProject(TeamProject):
             if project:
                 print(f"Project '{project_name}' found.")
                 
-                self.project_name = project.name
-                # Retrieve repositories in the project
+                self.id = project.id
+                self.name = project.name
+                self.description = project.description
+                self.url = project.url
+                self.state = project.state
+                self.revision = project.revision
+                self.visibility = project.visibility
+                self.last_update_time = project.last_update_time
+                
+                                                # Retrieve repositories in the project
                 repos = self.git_client.get_repositories(project=project.id)
 
                 # Set the first repository name found, if any
@@ -515,9 +530,10 @@ class AzureDevOpsProject(TeamProject):
                 else:
                     print(f"No repositories found in project '{project_name}'.")
 
+                self.project_name = project.name
                 self.team_name = self.project_name + ' Team'
                 self.repo_name = self.project_name + ' Repository'
-                self.items = self.get_work_items_hierarchy()    
+                #self.items = self.get_work_items_hierarchy()    
                 return project
             else:
                 print(f"Project '{project_name}' not found.")
@@ -565,10 +581,10 @@ class AzureDevOpsProject(TeamProject):
 
     def add_user_to_team(self, user_email, additional_groups=[]):
         """
-        Invite a user to the Azure DevOps organization
+        Invite a user to the Azure DevOps organization and add them to existing groups
         Args:
             user_email (str): Email of the user to invite
-            additional_groups (list): List of additional group names
+            additional_groups (list): List of additional group names to add user to if they exist
         Returns:
             dict: Response from the API
         Raises:
@@ -578,19 +594,26 @@ class AzureDevOpsProject(TeamProject):
         try:
             validate_email(user_email)
             
+            # Get team descriptor
             team_descriptor = self.get_team_descriptor(self.project_name, self.team_name)
             if not team_descriptor:
                 print(f"Error: Team descriptor for '{self.team_name}' not found.")
                 return None
 
             group_descriptors = [team_descriptor]
-            for group in additional_groups:
-                group_json = json.loads(self.get_group(group))
+            
+            # Process each additional group
+            for group_name in additional_groups:
+                # Try to get existing group
+                group_json = self.get_group(group_name)
                 if group_json:
-                    group_descriptors.append(group_json['descriptor'])
+                    group_info = json.loads(group_json)
+                    group_descriptors.append(group_info['descriptor'])
+                    print(f"Adding user to existing group: {group_name}")
                 else:
-                    print(f"Warning: Group '{group}' not found. Skipping.")
+                    print(f"Warning: Group '{group_name}' not found. Skipping.")
 
+            # Add user to all found groups
             url = f"{self.vssps_url}/_apis/graph/users?api-version=7.1-preview.1"
 
             headers = {
@@ -602,11 +625,16 @@ class AzureDevOpsProject(TeamProject):
                 "principalName": user_email
             }
 
-            response = requests.post(url, headers=headers, json=payload, params={'groupDescriptors': ','.join(group_descriptors)})
+            response = requests.post(
+                url, 
+                headers=headers, 
+                json=payload, 
+                params={'groupDescriptors': ','.join(group_descriptors)}
+            )
 
-            response.raise_for_status()  # Raise an error for bad responses
+            response.raise_for_status()
 
-            print(f"User '{user_email}' added to Team: '{self.team_name}' successfully.")
+            print(f"User '{user_email}' added to Team: '{self.team_name}' and existing additional groups successfully.")
             return response.json()
 
         except requests.exceptions.HTTPError as http_err:
@@ -633,6 +661,7 @@ class AzureDevOpsProject(TeamProject):
                 repo_name = self.repo_name             
             hash_object = hashlib.sha256(self.credentials.password.encode())
             short_hash = hash_object.hexdigest()[:16]
+            
             # Construct the repository URL
             repo_url = f"{self.organization_url}/{self.project_name}/_git/{self.repo_name}"
             # Normalize the base directory path            
@@ -724,6 +753,9 @@ class AzureDevOpsProject(TeamProject):
             int: ID of the created work item or None if failed
         """
         try:
+            if parent_id=='':
+                parent_id=None
+                
             # Get the Work Item Tracking client
             work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
 
@@ -984,46 +1016,46 @@ class AzureDevOpsProject(TeamProject):
             print(f"Error getting group '{group_name}': {str(e)}")
             return None
     
-    def get_backlog_item_ids(self, item_type):
+    def get_backlog_item_ids(self, item_type="Product Backlog Item"):
         """
-        Get a list of backlog item IDs of a specific type from a project in Azure DevOps
+        Get a list of backlog item IDs from a project in Azure DevOps using the REST API
         Args:
-            item_type (str): The type of the backlog item
+            item_type (str): Type of the backlog item (e.g., "Product Backlog Item", "Bug")
         Returns:
-            list: List of backlog item IDs
+            list: List of work item IDs
         """
         try:
-            # Initialize an empty list to store all work item IDs
-            work_item_ids = []
-
-            # WIQL query to get all work items of the specified type
+            # Define the WIQL query to get backlog item IDs
             wiql_query = {
                 "query": f"""
                 SELECT [System.Id]
                 FROM WorkItems
                 WHERE [System.TeamProject] = '{self.project_name}'
                 AND [System.WorkItemType] = '{item_type}'
+                ORDER BY [System.Id]
                 """
             }
 
-            # Make API request to get work item IDs
-            url = f"{self.organization_url}/{self.project_name}/_apis/wit/wiql?api-version=6.0"
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
-            }
+            # Construct the URL for the WIQL query with a stable API version
+            url = f"{self.organization_url}/_apis/wit/wiql?api-version=6.0"
 
-            response = requests.post(url, json=wiql_query, headers=headers)
+            # Make the HTTP request to the Azure DevOps REST API
+            response = requests.post(
+                url,
+                json=wiql_query,
+                auth=('', self.credentials.password)
+            )
+
+            # Check if the request was successful
             response.raise_for_status()
 
-            # Extract work item IDs
-            for item in response.json().get('workItems', []):
-                work_item_ids.append(item['id'])
-
+            # Extract work item IDs from the response
+            work_item_ids = [item['id'] for item in response.json().get('workItems', [])]
+            print(f"Retrieved {len(work_item_ids)} backlog item IDs from project '{self.project_name}'.")
             return work_item_ids
 
-        except Exception as e:
-            print(f"Error getting backlog item IDs: {str(e)}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error retrieving backlog item IDs: {str(e)}")
             return []
     
     def get_backlog_items(self, item_types=["Product Backlog Item", "Epic", "Feature", "User story", "Task"]):
@@ -1095,7 +1127,9 @@ class AzureDevOpsProject(TeamProject):
             print(f"Error retrieving backlog items: {str(e)}")
             return []
     
-    def find_user(self, user_name_or_email, subject_types='aad'):
+
+
+    def find_user(self, user_name_or_email, subject_types=['aad']):
         """
         Find a user in the Azure DevOps organization using the REST API
         Args:
@@ -1105,8 +1139,11 @@ class AzureDevOpsProject(TeamProject):
             dict: User object if found, None otherwise
         """
         try:
+            # Join the subject types into a comma-separated string
+            subject_types_str = ','.join(subject_types)
+
             # Define the URL for the users API
-            url = f"{self.vssps_url}/_apis/graph/users?subjectTypes={subject_types}&api-version=7.1-preview.1"
+            url = f"{self.vssps_url}/_apis/graph/users?subjectTypes={subject_types_str}&api-version=7.1-preview.1"
 
             # Define the headers for the request
             headers = {
@@ -1115,7 +1152,7 @@ class AzureDevOpsProject(TeamProject):
             }
 
             # Send the GET request to list users
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, params={'subjectTypes': subject_types_str})
 
             # Check if the request was successful
             response.raise_for_status()
@@ -1150,7 +1187,7 @@ class AzureDevOpsProject(TeamProject):
             print(f"An unexpected error occurred: {str(e)}")
             return None
     
-    def list_active_directory_users(self):
+    def list_team_users(self):
         """
         List users from the Active Directory in Azure DevOps
         Returns:
@@ -1478,12 +1515,22 @@ class AzureDevOpsProject(TeamProject):
         Update fields of an existing work item
         Args:
             work_item_id (int): ID of the work item to update
-            field_updates (dict): Dictionary of field paths and their new values
+            field_updates (list or dict): array of field paths and their new values,
+                                        or a JSON/dict of field paths and values
         Returns:
             object: Updated work item object or None if failed
         """
         try:
             work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Convert field_updates to list if it's a dictionary/JSON
+            if not isinstance(field_updates, list):
+                if isinstance(field_updates, str):
+                    # Parse JSON string to dictionary
+                    field_updates = json.loads(field_updates)
+                
+                # Convert dictionary to list of tuples
+                field_updates = field_updates.items()
 
             # Create a list of JsonPatchOperation objects for each field update
             document = [
@@ -1492,7 +1539,7 @@ class AzureDevOpsProject(TeamProject):
                     path=f"/fields/{field_path}",
                     value=value
                 )
-                for field_path, value in field_updates.items()
+                for field_path, value in field_updates
             ]
 
             # Update the work item
@@ -1505,6 +1552,9 @@ class AzureDevOpsProject(TeamProject):
             print(f"Work item {work_item_id} updated successfully.")
             return updated_work_item
 
+        except json.JSONDecodeError as e:
+            print(f"Error parsing field updates JSON: {str(e)}")
+            return None
         except Exception as e:
             print(f"Error updating work item: {str(e)}")
             return None
@@ -1646,4 +1696,857 @@ class AzureDevOpsProject(TeamProject):
             print(f"Error getting work item relations: {str(e)}")
             return None
     
+    def get_group_by_descriptor(self, descriptor):
+        """
+        Get a group by its descriptor using the REST API
+        Args:
+            descriptor (str): The descriptor of the group to find
+        Returns:
+            str: JSON string of the group details if found, None otherwise
+        """
+        try:
+            # Define the URL for the group API
+            url = f"{self.vssps_url}/_apis/graph/groups/{descriptor}?api-version=7.1-preview.1"
+
+            # Define the headers for the request
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+
+            # Send the GET request to get the group
+            response = requests.get(url, headers=headers)
+
+            # Check if the request was successful
+            response.raise_for_status()
+
+            # Extract the group details
+            group = response.json()
+            
+            # Convert the group object to a dictionary
+            group_dict = {
+                "display_name": group.get('displayName'),
+                "descriptor": group.get('descriptor'),
+                "url": group.get('url'),
+                "origin": group.get('origin'),
+                "subject_kind": group.get('subjectKind'),
+                "domain": group.get('domain'),
+                "mail_address": group.get('mailAddress'),
+                "principal_name": group.get('principalName'),
+                "legacy_descriptor": group.get('legacyDescriptor')
+            }
+
+            # Convert the dictionary to a JSON string
+            group_json = json.dumps(group_dict, indent=4)
+            return group_json
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting group by descriptor '{descriptor}': {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting group by descriptor '{descriptor}': {str(e)}")
+            return None
     
+    def find_group_by_display_name(self, display_name):
+        """
+        Find a group by its display name in Azure DevOps
+        Args:
+            display_name (str): Display name of the group to find
+        Returns:
+            object: Group object if found, None otherwise
+        Raises:
+            ValidationError: If display name is invalid
+            GroupError: If group operation fails
+        """
+        try:
+            if not display_name:
+                raise ValidationError("Display name cannot be empty")
+
+            # List all groups
+            groups = self.graph_client.list_groups()
+            
+            # Find the group with matching display name
+            for group in groups.graph_groups:
+                if group.display_name.lower() == display_name.lower():
+                    return group
+                    
+            logger.warning(f"Group with display name '{display_name}' not found")
+            return None
+
+        except ValidationError as e:
+            raise e
+        except Exception as e:
+            raise GroupError(f"Error finding group '{display_name}': {str(e)}")
+    
+    def to_json(self):
+        """
+        Helper method to convert project properties to JSON format
+        Returns:
+            str: JSON string containing the project properties
+        """
+        try:
+            # Only fetch items if they're not already present
+            items = self.items
+            if not items:
+                items_json = self.get_work_items_hierarchy()
+                if isinstance(items_json, str):
+                    items = json.loads(items_json)
+                
+            project_dict = {
+                "id": self.id,
+                "name": self.name,
+                "description": self.description,
+                "url": self.url,
+                "state": self.state,
+                "revision": self.revision,
+                "visibility": self.visibility,
+                "repo_name": self.repo_name,
+                "team_name": self.team_name,
+                "last_update_time": self.last_update_time.isoformat() if self.last_update_time else None,
+                "items": items
+            }
+            
+            return json.dumps(project_dict, indent=4)
+
+        except Exception as e:
+            logger.error(f"Error in to_json: {str(e)}")
+            return None
+    
+    def create_iteration(self, iteration_name, start_date, finish_date):
+        """
+        Create a new iteration in Azure DevOps using the REST API
+        Args:
+            iteration_name (str): Name of the iteration
+            start_date (str): Start date of the iteration in 'YYYY-MM-DD' format
+            finish_date (str): Finish date of the iteration in 'YYYY-MM-DD' format
+        Returns:
+            dict: Created iteration object or None if failed
+        """
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+
+            # First, create the iteration path
+            classification_url = f"{self.organization_url}/{self.project_name}/_apis/wit/classificationnodes/iterations?api-version=7.1-preview.2"
+            
+            path_payload = {
+                "name": iteration_name,
+                "attributes": {
+                    "startDate": start_date,
+                    "finishDate": finish_date
+                }
+            }
+
+            # Create the iteration path
+            path_response = requests.post(classification_url, headers=headers, json=path_payload)
+            path_response.raise_for_status()
+                       
+
+            print(f"Iteration '{iteration_name}' created successfully in project '{self.project_name}'.")
+            return path_response.json()
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error creating iteration: {str(e)}")
+            return None
+        
+    def assign_work_item_to_iteration(self, work_item_id, iteration_path):
+        """
+        Assign a work item to a specific iteration in Azure DevOps
+        Args:
+            project_name (str): Name of the project
+            work_item_id (int): ID of the work item
+            iteration_path (str): Path of the iteration to assign the work item to
+        Returns:
+            object: Updated work item object or None if failed
+        """
+        try:
+            # Get the Work Item Tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Define the update operation for assigning the work item to an iteration
+            document = [
+                JsonPatchOperation(
+                    op="add",
+                    path="/fields/System.IterationPath",
+                    value=f"{self.project_name}\\{iteration_path}"
+                )
+            ]
+
+            # Update the work item
+            updated_work_item = work_item_tracking_client.update_work_item(
+                document=document,
+                id=work_item_id,
+                project=self.project_name
+            )
+
+            print(f"Work item {work_item_id} assigned to iteration '{iteration_path}' successfully.")
+            return updated_work_item
+
+        except Exception as e:
+            print(f"Error assigning work item to iteration: {str(e)}")
+            return None
+    
+    def assign_work_item_to_user(self, work_item_id, user_email):        
+        """
+        Assign a work item to a specific user in Azure DevOps
+        Args:
+            work_item_id (int): ID of the work item
+            user_email (str): Email of the user to assign the work item to
+        Returns:
+            object: Updated work item object or None if failed
+        """
+        try:
+            # First, find the user to get their details
+            user_json = self.find_user(user_email)
+            if not user_json:
+                print(f"Error: User '{user_email}' not found")
+                return None
+                
+            # Parse the user JSON string to get the display name
+            user_dict = json.loads(user_json)
+            user_principal_name = user_dict.get('principal_name')
+            
+            if not user_principal_name:
+                print(f"Error: Could not get principal name for user '{user_email}'")
+                return None
+
+            # Get the Work Item Tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Define the update operation for assigning the work item
+            document = [
+                JsonPatchOperation(
+                    op="add",
+                    path="/fields/System.AssignedTo",
+                    value=user_principal_name
+                )
+            ]
+
+            # Update the work item
+            updated_work_item = work_item_tracking_client.update_work_item(
+                document=document,
+                id=work_item_id,
+                project=self.project_name
+            )
+
+            print(f"Work item {work_item_id} assigned to {user_principal_name} successfully.")
+            return updated_work_item
+
+        except Exception as e:
+            print(f"Error assigning work item: {str(e)}")
+            return None
+        
+    def add_default_folders_to_repo(self, project_name, folders=['src', 'test', 'assets', 'docs', 'lib', 'build', 'deploy'], repo_name=None):
+        """
+        Add specified folders with a descriptive README.md file to the root of a repository in Azure DevOps
+        Args:
+            project_name (str): Name of the project
+            repo_name (str): Name of the repository
+            folders (list): List of folder names to add
+        """
+        try:
+            # Retrieve the repository to ensure we have the correct repository ID
+            if repo_name == None:
+                repo_name = self.repo_name
+            repo = self.git_client.get_repository(project=project_name, repository_id=repo_name)
+            if not repo:
+                print(f"Repository '{repo_name}' does not exist in project '{project_name}'.")
+                return None
+
+            # Check if the branch exists
+            branch_name = "main"
+            refs = self.git_client.get_refs(repository_id=repo.id, project=project_name)
+            branch_ref = next((ref for ref in refs if ref.name == f"refs/heads/{branch_name}"), None)
+
+            if not branch_ref:
+                print(f"Branch '{branch_name}' does not exist in repository '{repo_name}'.")
+                return None
+
+            # Define descriptive content for each folder
+            folder_descriptions = {
+                "src": "# Source Code\n\nThis folder contains the main source code for the project.",
+                "test": "# Tests\n\nThis folder contains test cases and testing scripts.",
+                "assets": "# Assets\n\nThis folder contains images, videos, and other media assets.",
+                "docs": "# Documentation\n\nThis folder contains project documentation and guides.",
+                "lib": "# Libraries\n\nThis folder contains external libraries and dependencies.",
+                "build": "# Build\n\nThis folder contains the build scripts and configuration.",
+                "deploy": "# Deploy\n\nThis folder contains the deployment scripts and configuration."
+            }
+
+            # Create a commit to add the folders with README.md files
+            changes = [{
+                "changeType": "add",
+                "item": {"path": f"/{folder}/README.md"},
+                "newContent": {
+                    "content": folder_descriptions.get(folder, f"# {folder.capitalize()}\n\nThis folder contains the {folder} files."),
+                    "contentType": "rawtext"
+                }
+            } for folder in folders]
+
+            push = {
+                "refUpdates": [{"name": f"refs/heads/{branch_name}", "oldObjectId": branch_ref.object_id}],
+                "commits": [{
+                    "comment": "Add folders with descriptive README.md",
+                    "changes": changes
+                }]
+            }
+
+            try:
+                self.git_client.create_push(push, repository_id=repo.id, project=project_name)
+                print(f"Folders {folders} with descriptive README.md added successfully to repository '{repo_name}'.")
+            except Exception as e:
+                print(f"Error adding folders: {e}")
+        except Exception as e:
+            print(f"Error adding folders to repository: {str(e)}")
+
+    
+    def get_work_items_assigned_to_user(self, user_email):
+        """
+        Get all work items assigned to a particular user in Azure DevOps using the REST API
+        Args:
+            user_email (str): Email of the user
+        Returns:
+            list: List of WorkItemDetails objects or None if failed
+        """
+        try:
+            # Define the WIQL query to find work items assigned to the user
+            wiql_query = {
+                "query": f"""
+                SELECT [System.Id], [System.AreaPath], [System.TeamProject], [System.IterationPath],
+                       [System.WorkItemType], [System.State], [System.Reason]
+                FROM WorkItems
+                WHERE [System.AssignedTo] = '{user_email}'
+                AND [System.TeamProject] = '{self.project_name}'
+                ORDER BY [System.ChangedDate] DESC
+                """
+            }
+
+            # Construct the URL for the WIQL query
+            url = f"{self.organization_url}/{self.project_name}/_apis/wit/wiql?api-version=6.0"
+
+            # Define the headers for the request
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+
+            # Make the HTTP request to the Azure DevOps REST API
+            response = requests.post(url, json=wiql_query, headers=headers)
+
+            # Check if the request was successful
+            response.raise_for_status()
+
+            # Extract work item IDs from the response
+            work_item_ids = [item['id'] for item in response.json().get('workItems', [])]
+
+            # Retrieve the work items using the IDs
+            if work_item_ids:
+                # Construct the URL to get work item details
+                ids_str = ','.join(map(str, work_item_ids))
+                work_items_url = f"{self.organization_url}/_apis/wit/workitems?ids={ids_str}&fields=System.AreaPath,System.TeamProject,System.IterationPath,System.WorkItemType,System.State,System.Reason,System.CommentCount,System.ChangedDate,System.CreatedDate,System.Title,System.BoardColumn,System.BoardColumnDone,Microsoft.VSTS.Common.StateChangeDate,Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Common.ValueArea,WEF_C0095A5713844C44BD92373DCB0B692E_Kanban.Column,WEF_C0095A5713844C44BD92373DCB0B692E_Kanban.Column.Done,System.Description,System.AssignedTo,System.CreatedBy,System.ChangedBy&api-version=6.0"
+
+                # Make the HTTP request to get work item details
+                work_items_response = requests.get(work_items_url, headers=headers)
+                work_items_response.raise_for_status()
+
+                work_items_data = work_items_response.json().get('value', [])
+                work_items = []
+
+                for item in work_items_data:
+                    # Fetch comments for each work item
+                    comments_url = f"{self.organization_url}/{self.project_name}/_apis/wit/workItems/{item.get('id')}/comments?api-version=7.2-preview.4"
+                    comments_response = requests.get(comments_url, headers=headers)
+                    comments_response.raise_for_status()
+                    comments_data = comments_response.json().get('comments', [])
+
+                    # Extract comment details
+                    comments = [
+                        {
+                            "id": comment.get('id'),
+                            "text": comment.get('text'),
+                            "created_by": comment.get('createdBy', {}).get('uniqueName', '')
+                        }
+                        for comment in comments_data
+                    ]
+
+                    work_item = WorkItemDetails(
+                        id=item.get('id'),
+                        url=item.get('url'),
+                        title=item['fields'].get('System.Title', ''),
+                        description=item['fields'].get('System.Description', ''),
+                        work_item_type=item['fields'].get('System.WorkItemType', ''),
+                        state=item['fields'].get('System.State', ''),
+                        assigned_to=item['fields'].get('System.AssignedTo', {}).get('uniqueName', ''),
+                        area_path=item['fields'].get('System.AreaPath', ''),
+                        team_project=item['fields'].get('System.TeamProject', ''),
+                        iteration_path=item['fields'].get('System.IterationPath', ''),
+                        reason=item['fields'].get('System.Reason', ''),
+                        comment_count=item['fields'].get('System.CommentCount', 0),
+                        changed_date=item['fields'].get('System.ChangedDate', ''),
+                        created_date=item['fields'].get('System.CreatedDate', ''),
+                        board_column=item['fields'].get('System.BoardColumn', ''),
+                        board_column_done=item['fields'].get('System.BoardColumnDone', False),
+                        state_change_date=item['fields'].get('Microsoft.VSTS.Common.StateChangeDate', ''),
+                        priority=item['fields'].get('Microsoft.VSTS.Common.Priority', 0),
+                        value_area=item['fields'].get('Microsoft.VSTS.Common.ValueArea', ''),
+                        kanban_column=item['fields'].get('WEF_C0095A5713844C44BD92373DCB0B692E_Kanban.Column', ''),
+                        kanban_column_done=item['fields'].get('WEF_C0095A5713844C44BD92373DCB0B692E_Kanban.Column.Done', False),
+                        created_by=item['fields'].get('System.CreatedBy', {}).get('uniqueName', ''),
+                        changed_by=item['fields'].get('System.ChangedBy', {}).get('uniqueName', ''),
+                        comments=comments
+                    )
+                    work_items.append(work_item)
+
+                print(f"Retrieved {len(work_items)} work items assigned to '{user_email}'.")
+                work_items_dict = [item.to_dict() for item in work_items]
+
+                # Convert the list of dictionaries to a JSON string
+                work_items_json = json.dumps(work_items_dict, indent=4)
+                
+                return work_items_json
+            else:
+                print(f"No work items found assigned to '{user_email}'.")
+                return []
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error retrieving work items for user '{user_email}': {str(e)}")
+            return None
+
+    def remove_user_matching(self, user_email):
+        """
+        Remove users from Azure DevOps using the Graph client where user_email matches part of display name
+        Args:
+            user_email (str): Email or name pattern to match against user display names
+        Returns:
+            bool: True if any users were removed successfully, False otherwise
+        """
+        try:
+            # Initialize the Graph client
+            graph_client = self.connection.clients.get_graph_client()
+
+            # Get all users
+            users = graph_client.list_users()
+            
+            # Find all users whose display name contains the search string
+            users_to_remove = [
+                user for user in users.graph_users 
+                if user_email.lower() in user.display_name.lower()
+            ]
+
+            if not users_to_remove:
+                print(f"No users found with '{user_email}' in their display name.")
+                return False
+
+            removal_success = False
+            for user in users_to_remove:
+                try:
+                    # Delete the user using their descriptor
+                    graph_client.delete_user(user_descriptor=user.descriptor)
+                    print(f"Successfully removed user: {user.display_name}")
+                    removal_success = True
+                except Exception as delete_error:
+                    print(f"Failed to remove user {user.display_name}: {str(delete_error)}")
+
+            return removal_success
+
+        except Exception as e:
+            print(f"Error during user removal operation: {str(e)}")
+            return False
+
+    
+    def list_users_in_tenant(self, pattern=None, subject_types=['aad']):
+        """
+        List users in the Azure DevOps tenant using REST API, optionally filtered by a pattern
+        Args:
+            pattern (str, optional): Pattern to match against user display name, principal name, or email
+            subject_types (list, optional): List of subject types to filter by (default: ['aad'])
+        Returns:
+            str: JSON string containing list of matching user objects or all users if no pattern provided
+        """
+        try:
+            # Define the URL for the users API with subject types parameter
+            subject_types_param = ','.join(subject_types)
+            url = f"{self.vssps_url}/_apis/graph/users?subjectTypes={subject_types_param}&api-version=7.1-preview.1"
+
+            # Define the headers for the request
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+
+            # Send the GET request to list users
+            response = requests.get(url, headers=headers)
+
+            # Check if the request was successful
+            response.raise_for_status()
+
+            # Extract users from response
+            users = response.json().get('value', [])
+            
+            # Convert users to a list of dictionaries with relevant information
+            user_list = []
+            for user in users:
+                user_info = {
+                    "display_name": user.get('displayName'),
+                    "principal_name": user.get('principalName'),
+                    "mail_address": user.get('mailAddress'),
+                    "descriptor": user.get('descriptor'),
+                    "domain": user.get('domain'),
+                    "origin": user.get('origin'),
+                    "origin_id": user.get('originId'),
+                    "subject_kind": user.get('subjectKind')
+                }
+                
+                # If pattern is provided, filter users
+                if pattern:
+                    pattern = pattern.lower()
+                    if (pattern in user_info["display_name"].lower() or 
+                        pattern in (user_info["principal_name"] or '').lower() or 
+                        pattern in (user_info["mail_address"] or '').lower()):
+                        user_list.append(user_info)
+                else:
+                    user_list.append(user_info)
+
+            # Sort the list by display name
+            user_list.sort(key=lambda x: x["display_name"])
+
+            # Convert to JSON string for consistent output
+            return json.dumps(user_list, indent=4)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error listing users in tenant: {str(e)}")
+            return None
+
+    def get_current_phase(self):
+        """
+        Get or create the Epic named 'Documentation' and return its phase
+        Returns:
+            str: Value after backslash in area path (e.g., 'development' from 'SiamEComm\\development'),
+                 or None if operation failed
+        """
+        try:
+            # Get the work item tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Create WIQL query to find the Documentation Epic
+            wiql = {
+                "query": f"""
+                    SELECT [System.Id], [System.AreaPath]
+                    FROM WorkItems
+                    WHERE [System.WorkItemType] = 'Epic'
+                    AND [System.Title] = 'Documentation'
+                    AND [System.TeamProject] = '{self.project_name}'
+                """
+            }
+
+            # Execute the query
+            query_results = work_item_tracking_client.query_by_wiql(wiql).work_items
+
+            if not query_results:
+                print("No Documentation Epic found. Creating new one...")
+                # Create the Documentation Epic with default phase
+                default_phase = 'inception'
+                document = [
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Title",
+                        value="Documentation"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.WorkItemType",
+                        value="Epic"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Description",
+                        value="Documentation Epic for tracking project phases"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.AreaPath",
+                        value=f"{self.project_name}\\{default_phase}"
+                    )
+                ]
+
+                # Create the work item
+                work_item_tracking_client.create_work_item(
+                    document=document,
+                    project=self.project_name,
+                    type="Epic"
+                )
+                print(f"Documentation Epic created with default phase: {default_phase}")
+                return default_phase
+
+            # Get the first matching work item's details
+            work_item = work_item_tracking_client.get_work_item(query_results[0].id)
+            area_path = work_item.fields.get('System.AreaPath')
+
+            if area_path:
+                # Parse out the value after the backslash
+                parts = area_path.split('\\')
+                if len(parts) > 1:
+                    result = parts[1]
+                    print(f"Documentation Epic found in area: {area_path}, returning phase: {result}")
+                    return result
+                else:
+                    print(f"Documentation Epic found but area path has no backslash: {area_path}")
+                    return None
+            else:
+                print("Documentation Epic found but has no area path.")
+                return None
+
+        except Exception as e:
+            print(f"Error getting Documentation Epic area: {str(e)}")
+            return None
+
+    def set_current_phase(self, phase):
+        """
+        Set the area path of the Epic named 'Documentation', creating it if it doesn't exist
+        Args:
+            phase (str): Phase name to set as the area path
+        Returns:
+            str: Phase part of the area path if successful, None if operation failed
+        """
+        try:
+            # Get the work item tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Create WIQL query to find the Documentation Epic
+            wiql = {
+                "query": f"""
+                    SELECT [System.Id], [System.AreaPath]
+                    FROM WorkItems
+                    WHERE [System.WorkItemType] = 'Epic'
+                    AND [System.Title] = 'Documentation'
+                    AND [System.TeamProject] = '{self.project_name}'
+                """
+            }
+
+            # Execute the query
+            query_results = work_item_tracking_client.query_by_wiql(wiql).work_items
+
+            if not query_results:
+                print("No Documentation Epic found. Creating new one...")
+                document = [
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Title",
+                        value="Documentation"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.WorkItemType",
+                        value="Epic"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Description",
+                        value="Documentation Epic for tracking project phases"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.AreaPath",
+                        value=f"{self.project_name}\\{phase}"
+                    )
+                ]
+
+                # Create the work item
+                work_item_tracking_client.create_work_item(
+                    document=document,
+                    project=self.project_name,
+                    type="Epic"
+                )
+                print(f"Documentation Epic created with phase: {phase}")
+                return phase
+
+            # Update existing Epic
+            work_item_id = query_results[0].id
+            document = [
+                JsonPatchOperation(
+                    op="add",
+                    path="/fields/System.AreaPath",
+                    value=f"{self.project_name}\\{phase}"
+                )
+            ]
+
+            # Update the work item
+            work_item_tracking_client.update_work_item(
+                document=document,
+                id=work_item_id,
+                project=self.project_name
+            )
+            print(f"Documentation Epic updated with phase: {phase}")
+            return phase
+
+        except Exception as e:
+            print(f"Error setting Documentation Epic phase: {str(e)}")
+            return None
+        
+    def get_current_iteration(self):
+        """
+        Get or create the Epic named 'Documentation' and return its ITERATION
+        Returns:
+            str: Value after backslash in area path (e.g., 'development' from 'SiamEComm\\development'),
+                 or None if operation failed
+        """
+        try:
+            # Get the work item tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Create WIQL query to find the Documentation Epic
+            wiql = {
+                "query": f"""
+                    SELECT [System.Id], [System.IterationPath]
+                    FROM WorkItems
+                    WHERE [System.WorkItemType] = 'Epic'
+                    AND [System.Title] = 'Documentation'
+                    AND [System.TeamProject] = '{self.project_name}'
+                """
+            }
+
+            # Execute the query
+            query_results = work_item_tracking_client.query_by_wiql(wiql).work_items
+
+            if not query_results:
+                print("No Documentation Epic found. Creating new one...")
+                # Create the Documentation Epic with default phase
+                default_iteration = 'Sprint 1'
+                document = [
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Title",
+                        value="Documentation"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.WorkItemType",
+                        value="Epic"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Description",
+                        value="Documentation Epic for tracking project phases"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.IterationPath",
+                        value=f"{self.project_name}\\{default_iteration}"
+                    )
+                ]
+
+                # Create the work item
+                work_item_tracking_client.create_work_item(
+                    document=document,
+                    project=self.project_name,
+                    type="Epic"
+                )
+                print(f"Documentation Epic created with default iteration: {default_iteration}")
+                return default_iteration
+
+            # Get the first matching work item's details
+            work_item = work_item_tracking_client.get_work_item(query_results[0].id)
+            iteration_path = work_item.fields.get('System.IterationPath')
+
+            if iteration_path:
+                # Parse out the value after the backslash
+                parts = iteration_path.split('\\')
+                if len(parts) > 1:
+                    result = parts[1]
+                    print(f"Documentation Epic found in iteration: {iteration_path}, returning iteration: {result}")
+                    return result
+                else:
+                    print(f"Documentation Epic found but iteration path has no backslash: {iteration_path}")
+                    return None
+            else:
+                print("Documentation Epic found but has no iteration path.")
+                return None
+
+        except Exception as e:
+            print(f"Error getting Documentation Epic iteration: {str(e)}")
+            return None
+
+    def set_current_iteration(self, iteration):
+        """
+        Set the area path of the Epic named 'Documentation', creating it if it doesn't exist
+        Args:
+            phase (str): Phase name to set as the area path
+        Returns:
+            str: Phase part of the area path if successful, None if operation failed
+        """
+        try:
+            # Get the work item tracking client
+            work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
+
+            # Create WIQL query to find the Documentation Epic
+            wiql = {
+                "query": f"""
+                    SELECT [System.Id], [System.AreaPath]
+                    FROM WorkItems
+                    WHERE [System.WorkItemType] = 'Epic'
+                    AND [System.Title] = 'Documentation'
+                    AND [System.TeamProject] = '{self.project_name}'
+                """
+            }
+
+            # Execute the query
+            query_results = work_item_tracking_client.query_by_wiql(wiql).work_items
+
+            if not query_results:
+                print("No Documentation Epic found. Creating new one...")
+                document = [
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Title",
+                        value="Documentation"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.WorkItemType",
+                        value="Epic"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.Description",
+                        value="Documentation Epic for tracking project phases"
+                    ),
+                    JsonPatchOperation(
+                        op="add",
+                        path="/fields/System.IterationPath",
+                        value=f"{self.project_name}\\{iteration}"
+                    )
+                ]
+
+                # Create the work item
+                work_item_tracking_client.create_work_item(
+                    document=document,
+                    project=self.project_name,
+                    type="Epic"
+                )
+                print(f"Documentation Epic created with iteration: {iteration}")
+                return iteration
+
+            # Update existing Epic
+            work_item_id = query_results[0].id
+            document = [
+                JsonPatchOperation(
+                    op="add",
+                    path="/fields/System.IterationPath",
+                    value=f"{self.project_name}\\{iteration}"
+                )
+            ]
+
+            # Update the work item
+            work_item_tracking_client.update_work_item(
+                document=document,
+                id=work_item_id,
+                project=self.project_name
+            )
+            print(f"Documentation Epic updated with iteration: {iteration}")
+            return iteration
+
+        except Exception as e:
+            print(f"Error setting Documentation Epic phase: {str(e)}")
+            return None
