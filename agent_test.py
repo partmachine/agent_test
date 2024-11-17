@@ -46,17 +46,18 @@ def initiate_baggage_search():
 
 
 def transfer_to_product_owner():
-    phase = context_variables.get("phase").lower()
+    phase = devops.project.get_current_phase().lower()
     agents = {
-        "inception phase": product_owner_inception,
-        "planning phase": product_owner_planning,
-        "development phase": product_owner_development,
+        "inception": product_owner_inception,
+        "planning": product_owner_planning,
+        "development": product_owner_development,
         # Add other phases and corresponding agents here as needed
     }
 
     for key in agents:
         # Check if the phase is contained within the agent's key
         if phase in key:
+            devops.project.set_current_phase(key)
             return agents[key]
         
     return product_owner_inception
@@ -64,10 +65,12 @@ def transfer_to_product_owner():
 # generic functions
 def transfer_to_product_owner_planning():
     print(f"TRANSFER_TO_PRODUCT_OWNER_PLANNING")
+    devops.project.set_current_phase("planning")
     return product_owner_planning
 
 def transfer_to_product_owner_development():
     print(f"TRANSFER_TO_PRODUCT_OWNER_DEVELOPMENT")
+    devops.project.set_current_phase("development")
     return product_owner_development
 
 def transfer_to_planning_architect():
@@ -146,6 +149,9 @@ shared_functions = [
     devops.project.clone_repository_locally,
     devops.project.add_readme_to_repo,
     devops.project.add_default_folders_to_repo,
+    devops.project.folder_exists,
+    devops.project.file_exists,
+    devops.project.add_folder,
     
     # Team & User Management
     devops.project.create_team,
@@ -169,10 +175,8 @@ shared_functions = [
     devops.project.find_group_by_display_name,
     
     # Utility Functions
-    get_project_name,
-    get_iteration,    
+    get_project_name,       
     set_project_name,
-    set_iteration,
     
 ]
 
@@ -198,20 +202,20 @@ product_owner_planning = DevOpsAgent(
 
 product_owner_development = DevOpsAgent(
     name="Product Owner Agent (DEVELOPMENT)",
-    instructions=STARTER_PROMPT + PRODUCT_OWNER_PLANNING,
+    instructions=STARTER_PROMPT + PRODUCT_OWNER_DEVELOPMENT,
     functions=shared_functions + [
-        transfer_to_product_owner,
         transfer_to_product_owner_planning,
         transfer_to_product_owner_development,
-        transfer_to_ui_developer
+        transfer_to_ui_developer,
+        transfer_to_dotnet_developer
     ],
 )
 
 planning_architect = DevOpsAgent(
     name="Development Architect Agent (PLANNING)",
-    instructions=STARTER_PROMPT + DEVELOPMENT_ARCHITECT_INCEPTION_AND_PLANNING,
+    instructions=STARTER_PROMPT + ARCHITECT_PLANNING,
     functions=shared_functions + [
-        transfer_to_product_owner,
+        transfer_to_product_owner_planning,
         transfer_to_planning_architect
     ],
 )
@@ -221,7 +225,8 @@ ui_developer = DevOpsAgent(
     instructions=STARTER_PROMPT + UI_DEVELOPER_PROMPT,
     functions=shared_functions + [
         transfer_to_product_owner,
-        transfer_to_product_owner_planning
+        transfer_to_product_owner_planning,
+        transfer_to_product_owner_development
     ],
 )
 
@@ -229,8 +234,9 @@ dotnet_developer = DevOpsAgent(
     name="Developer Agent (DOTNET)",
     instructions=STARTER_PROMPT + DOTNET_DEVELOPER_PROMPT,
     functions=shared_functions + [
-        transfer_to_product_owner,        
-        transfer_to_product_owner_development
+        transfer_to_product_owner,    
+        transfer_to_product_owner_planning,    
+        transfer_to_product_owner_development        
     ],
 )
 # triage_agent = Agent(

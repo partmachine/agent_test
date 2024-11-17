@@ -455,7 +455,7 @@ class AzureDevOpsProject(TeamProject):
             "state": self.state,
             "revision": self.revision,
             "visibility": self.visibility,
-            "last_update_time": self.last_update_time,
+            "last_update_time": self.last_update_time.isoformat() if self.last_update_time else None,
             "items": {key: item.to_dict() for key, item in self.items.items()} if self.items else {}
         }
 
@@ -649,17 +649,21 @@ class AzureDevOpsProject(TeamProject):
             print(f"An unexpected error occurred: {str(e)}")
         return None
     
-    def clone_repository_locally(self, base_directory, repo_name=None):
+    def clone_repository_locally(self, base_directory, member_email=None, repo_name=None):
         """
         Clone a repository from Azure DevOps to a local directory
-        Args:
+        Args:   
             base_directory (str): Local directory to clone the repository into
+            member_email (str): Email of the member to add to the repository (optional)
             repo_name (str): Name of the repository (optional)
         """
         try:
             if not repo_name:
-                repo_name = self.repo_name             
-            hash_object = hashlib.sha256(self.credentials.password.encode())
+                repo_name = self.repo_name
+                
+            # Create hash from member_email if available, otherwise use credentials.password
+            hash_input = member_email if member_email else self.credentials.password
+            hash_object = hashlib.sha256(hash_input.encode())
             short_hash = hash_object.hexdigest()[:16]
             
             # Construct the repository URL
@@ -741,7 +745,7 @@ class AzureDevOpsProject(TeamProject):
         except Exception as e:
             print(f"Error deleting repository: {str(e)}")
     
-    def create_backlog_item(self, title, description, item_type="Product Backlog Item", parent_id=None):
+    def create_backlog_item(self, title, description, item_type="Project Backlog Item", parent_id=None):
         """
         Create a new backlog item in Azure DevOps
         Args:
@@ -1129,6 +1133,8 @@ class AzureDevOpsProject(TeamProject):
     
 
 
+
+
     def find_user(self, user_name_or_email, subject_types=['aad']):
         """
         Find a user in the Azure DevOps organization using the REST API
@@ -1162,7 +1168,7 @@ class AzureDevOpsProject(TeamProject):
 
             # Filter the user based on principalName or mailAddress
             for user in users:
-                if (user.get('principalName', '').lower() == user_name_or_email.lower() or
+                if (user.get('principalName', '').lower() == user_name_or_email.lower() or 
                     user.get('mailAddress', '').lower() == user_name_or_email.lower()):
                     # Convert the user object to a dictionary
                     user_dict = {
@@ -1853,10 +1859,9 @@ class AzureDevOpsProject(TeamProject):
         
     def assign_work_item_to_iteration(self, work_item_id, iteration_path):
         """
-        Assign a work item to a specific iteration in Azure DevOps
+        Assign a work item to a specific iteration
         Args:
-            project_name (str): Name of the project
-            work_item_id (int): ID of the work item
+            work_item_id (int): ID of the work item to assign
             iteration_path (str): Path of the iteration to assign the work item to
         Returns:
             object: Updated work item object or None if failed
@@ -1865,12 +1870,41 @@ class AzureDevOpsProject(TeamProject):
             # Get the Work Item Tracking client
             work_item_tracking_client = self.connection.clients.get_work_item_tracking_client()
 
-            # Define the update operation for assigning the work item to an iteration
+            # Clean up iteration path - remove any 'Iteration' folder reference
+            clean_iteration = iteration_path.replace('Iteration\\', '').replace('\\Iteration\\', '')
+            
+            # Get classification nodes to verify iteration exists
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+            classification_url = f"{self.organization_url}/{self.project_name}/_apis/wit/classificationnodes/iterations?$depth=100&api-version=7.1-preview.2"
+            
+            response = requests.get(classification_url, headers=headers)
+            response.raise_for_status()
+            iterations = response.json()
+
+            # Verify iteration exists
+            iteration_found = False
+            def find_iteration(node, target):
+                if node.get('name') == target:
+                    return True
+                for child in node.get('children', []):
+                    if find_iteration(child, target):
+                        return True
+                return False
+
+            iteration_found = find_iteration(iterations, clean_iteration)
+            
+            if not iteration_found:
+                print(f"Warning: Iteration '{clean_iteration}' not found in project. Work item will still be assigned but may cause issues.")
+
+            # Define the update operation
             document = [
                 JsonPatchOperation(
                     op="add",
                     path="/fields/System.IterationPath",
-                    value=f"{self.project_name}\\{iteration_path}"
+                    value=f"{self.project_name}\\{clean_iteration}"
                 )
             ]
 
@@ -1881,7 +1915,7 @@ class AzureDevOpsProject(TeamProject):
                 project=self.project_name
             )
 
-            print(f"Work item {work_item_id} assigned to iteration '{iteration_path}' successfully.")
+            print(f"Work item {work_item_id} assigned to iteration '{clean_iteration}' successfully.")
             return updated_work_item
 
         except Exception as e:
@@ -1938,15 +1972,17 @@ class AzureDevOpsProject(TeamProject):
             print(f"Error assigning work item: {str(e)}")
             return None
         
-    def add_default_folders_to_repo(self, project_name, folders=['src', 'test', 'assets', 'docs', 'lib', 'build', 'deploy'], repo_name=None):
+    def add_default_folders_to_repo(self, project_name, repo_name=None):
         """
         Add specified folders with a descriptive README.md file to the root of a repository in Azure DevOps
         Args:
             project_name (str): Name of the project
-            repo_name (str): Name of the repository
-            folders (list): List of folder names to add
+            repo_name (str): Name of the repository (optional)
+            folders (list): List of folder names to add (optional)
         """
         try:
+            folders = ['src', 'test', 'assets', 'docs', 'lib', 'build', 'deploy']
+
             # Retrieve the repository to ensure we have the correct repository ID
             if repo_name == None:
                 repo_name = self.repo_name
@@ -1972,7 +2008,7 @@ class AzureDevOpsProject(TeamProject):
                 "docs": "# Documentation\n\nThis folder contains project documentation and guides.",
                 "lib": "# Libraries\n\nThis folder contains external libraries and dependencies.",
                 "build": "# Build\n\nThis folder contains the build scripts and configuration.",
-                "deploy": "# Deploy\n\nThis folder contains the deployment scripts and configuration."
+                "scripts": "# Deploy\n\nThis folder contains build, deployment, and other utility scripts."
             }
 
             # Create a commit to add the folders with README.md files
@@ -2550,3 +2586,214 @@ class AzureDevOpsProject(TeamProject):
         except Exception as e:
             print(f"Error setting Documentation Epic phase: {str(e)}")
             return None
+
+
+    def add_folder(self, folder_path, description=None, repo_name=None):
+        """
+        Add a folder with a README.md file at the specified path in a repository.
+        Creates intermediate folders if they don't exist.
+        Args:            
+            folder_path (str): Path where the folder should be created (e.g., 'src/utils')
+            description (str): Description for the folder's README.md file (optional)
+            repo_name (str): Name of the repository (optional)
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get all repositories in the project
+            repos = self.git_client.get_repositories(project=self.project_name)
+            
+            # Find the repository to use
+            if len(repos) == 1:
+                # If only one repository exists, use it
+                repo = repos[0]
+                self.repo_name = repo.name  # Update the class's repo_name
+                repo_name = repo.name
+            else:
+                # Use the provided repo_name or class repo_name
+                if not repo_name:
+                    repo_name = self.repo_name
+                if not repo_name:
+                    print("No repository name specified and multiple repositories exist.")
+                    return False
+                repo = next((r for r in repos if r.name == repo_name), None)
+                if not repo:
+                    print(f"Repository '{repo_name}' not found in project '{self.project_name}'.")
+                    return False
+                
+            # Normalize folder path (remove leading/trailing slashes)
+            folder_path = folder_path.strip('/')
+            path_parts = folder_path.split('/')
+            
+            # Check if the branch exists
+            branch_name = "main"
+            refs = self.git_client.get_refs(repository_id=repo.id, project=self.project_name)
+            branch_ref = next((ref for ref in refs if ref.name == f"refs/heads/{branch_name}"), None)
+
+            if not branch_ref:
+                print(f"Branch '{branch_name}' does not exist in repository '{repo_name}'.")
+                return False
+
+            # Create each folder in the path if it doesn't exist
+            current_path = ""
+            changes = []
+            for i, part in enumerate(path_parts):
+                current_path = f"{current_path}/{part}" if current_path else part
+                
+                # Check if this part of the path exists
+                try:
+                    self.git_client.get_item(repository_id=repo.id, 
+                                           project=self.project_name,
+                                           path=f"/{current_path}/README.md")
+                except Exception:
+                    # Folder doesn't exist, add it to changes
+                    if i == len(path_parts) - 1:  # Last folder in path
+                        if not description:
+                            description = f"# {part.capitalize()}\n\nThis folder contains {part} related files."
+                    else:
+                        description = f"# {part.capitalize()}\n\nThis is a container folder for {part} related components."
+                    
+                    changes.append({
+                        "changeType": "add",
+                        "item": {"path": f"/{current_path}/README.md"},
+                        "newContent": {
+                            "content": description,
+                            "contentType": "rawtext"
+                        }
+                    })
+
+            if changes:
+                # Create the commit with all the necessary folders
+                push = {
+                    "refUpdates": [{"name": f"refs/heads/{branch_name}", "oldObjectId": branch_ref.object_id}],
+                    "commits": [{
+                        "comment": f"Add folders in path: {folder_path}",
+                        "changes": changes
+                    }]
+                }
+
+                # Push the changes
+                self.git_client.create_push(push, repository_id=repo.id, project=self.project_name)
+                print(f"Folders in path '{folder_path}' with README.md files added successfully to repository '{repo_name}'.")
+            else:
+                print(f"All folders in path '{folder_path}' already exist in repository '{repo_name}'.")
+            
+            return True
+
+        except Exception as e:
+            print(f"Error adding folders to repository: {str(e)}")
+            return False
+
+    def update_iteration(self, iteration_name, start_date=None, finish_date=None):
+        """
+        Update an existing iteration in Azure DevOps using the REST API
+        Args:
+            iteration_name (str): Name of the iteration to update
+            start_date (str, optional): New start date of the iteration in 'YYYY-MM-DD' format
+            finish_date (str, optional): New finish date of the iteration in 'YYYY-MM-DD' format
+        Returns:
+            dict: Updated iteration object or None if failed
+        """
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + base64.b64encode((':' + self.credentials.password).encode()).decode()
+            }
+
+            # First, get the iteration ID
+            classification_url = f"{self.organization_url}/{self.project_name}/_apis/wit/classificationnodes/iterations/{iteration_name}?api-version=7.1-preview.2"
+            
+            # Get current iteration details
+            response = requests.get(classification_url, headers=headers)
+            response.raise_for_status()
+            current_iteration = response.json()
+
+            # Prepare update payload
+            update_payload = {
+                "id": current_iteration['id'],
+                "name": iteration_name,
+                "attributes": {
+                    "startDate": start_date if start_date else current_iteration['attributes'].get('startDate'),
+                    "finishDate": finish_date if finish_date else current_iteration['attributes'].get('finishDate')
+                }
+            }
+
+            # Update the iteration
+            update_response = requests.patch(classification_url, headers=headers, json=update_payload)
+            update_response.raise_for_status()
+            
+            print(f"Iteration '{iteration_name}' updated successfully in project '{self.project_name}'.")
+            return update_response.json()
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error updating iteration: {str(e)}")
+            return None
+
+    def folder_exists(self, folder_path, repo_name=None):
+        """
+        Check if a folder exists in the repository
+        Args:
+            folder_path (str): Path to check (e.g., 'src/utils')
+            repo_name (str): Name of the repository (optional)
+        Returns:
+            bool: True if folder exists, False otherwise
+        """
+        try:
+            # Normalize folder path
+            folder_path = folder_path.strip('/')
+            
+            # Get repository
+            if not repo_name:
+                repo_name = self.repo_name
+            repo = self.git_client.get_repository(project=self.project_name, repository_id=repo_name)
+            if not repo:
+                return False
+
+            # Try to get the folder item
+            try:
+                self.git_client.get_item(
+                    repository_id=repo.id,
+                    project=self.project_name,
+                    path=f"/{folder_path}"
+                )
+                return True
+            except Exception:
+                return False
+
+        except Exception:
+            return False
+
+    def file_exists(self, file_path, repo_name=None):
+        """
+        Check if a file exists in the repository
+        Args:
+            file_path (str): Path to check (e.g., 'src/utils/helper.py')
+            repo_name (str): Name of the repository (optional)
+        Returns:
+            bool: True if file exists, False otherwise
+        """
+        try:
+            # Normalize file path
+            file_path = file_path.strip('/')
+            
+            # Get repository
+            if not repo_name:
+                repo_name = self.repo_name
+            repo = self.git_client.get_repository(project=self.project_name, repository_id=repo_name)
+            if not repo:
+                return False
+
+            # Try to get the file item
+            try:
+                self.git_client.get_item(
+                    repository_id=repo.id,
+                    project=self.project_name,
+                    path=f"/{file_path}",
+                    include_content=False
+                )
+                return True
+            except Exception:
+                return False
+
+        except Exception:
+            return False
